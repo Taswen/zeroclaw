@@ -1982,6 +1982,10 @@ impl Channel for WeChatChannel {
         "wechat"
     }
 
+    fn supports_draft_updates(&self) -> bool {
+        true
+    }
+
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         let recipient = &message.recipient;
         let content = crate::util::strip_tool_call_tags(&message.content);
@@ -2361,6 +2365,53 @@ impl Channel for WeChatChannel {
         if let Some(handle) = guard.take() {
             handle.abort();
         }
+        Ok(())
+    }
+
+    async fn send_draft(&self, _msg: &SendMessage) -> anyhow::Result<Option<String>> {
+        // TODO: Re-enable placeholder if WeChat adds message edit/revoke support.
+        //
+        // Current behavior: Return draft_id without sending placeholder.
+        // The final response will be sent in finalize_draft().
+        let draft_id = format!("draft_{}", uuid::Uuid::new_v4());
+        Ok(Some(draft_id))
+    }
+
+    async fn update_draft(
+        &self,
+        _recipient: &str,
+        _draft_id: &str,
+        _content: &str,
+    ) -> anyhow::Result<()> {
+        // WeChat iLink doesn't support message editing.
+        // We accumulate deltas in the draft_updater task and only send the final
+        // message in finalize_draft(). This method is a no-op.
+        Ok(())
+    }
+
+    async fn finalize_draft(
+        &self,
+        recipient: &str,
+        _draft_id: &str,
+        content: &str,
+    ) -> anyhow::Result<()> {
+        // Send the final accumulated response
+        let context_token = self.get_context_token(recipient);
+        let content = crate::util::strip_tool_call_tags(content);
+        let _ = self
+            .send_text(recipient, &content, context_token.as_deref())
+            .await?;
+        self.stop_typing(recipient).await
+    }
+
+    async fn update_draft_progress(
+        &self,
+        recipient: &str,
+        _draft_id: &str,
+        _progress: &str,
+    ) -> anyhow::Result<()> {
+        // Use the typing indicator instead of message updates
+        let _ = self.start_typing(recipient).await;
         Ok(())
     }
 }
